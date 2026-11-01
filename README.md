@@ -20,15 +20,18 @@
 - Original and translated text are shown separately.
 - Advanced settings stay out of the main workflow.
 
-## Development status
+## Current build status
 
-This repository is the new home for SubGenX. The Android implementation, automated build, and device validation are still to be added and verified. A successful CI build will not be treated as proof of transcription quality or runtime behavior on a device.
+- Native Android Kotlin project and basic audio-file selection UI are in place.
+- GitHub Actions builds a debug APK and publishes it as the `SubGenX-debug-apk` artifact.
+- **Important:** audio transcription, translation, subtitle review/editing, and SRT export are not implemented yet. The current APK tests the initial app shell and file-selection flow only.
+- A successful CI build does not prove transcription quality or runtime behavior on a device.
 
 ## Planned milestones
 
-1. Establish an Android build baseline and minimal, accessible UI.
+1. Establish an Android build baseline and minimal, accessible UI. (Current)
 2. Integrate and benchmark transcription engines on representative audio.
 3. Add translation as a separate stage, preserving original text and timestamps.
 4. Implement robust subtitle editing and SRT round-trip tests.
-5. Add GitHub Actions for tests and debug APK artifacts.
+5. Add automated tests for the subtitle pipeline.
 6. Validate speed, memory use, thermal behavior, and output quality on real devices.
