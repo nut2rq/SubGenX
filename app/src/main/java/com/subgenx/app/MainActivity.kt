@@ -13,6 +13,9 @@ import org.json.JSONObject
 import org.json.JSONArray
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.UnknownHostException
+import java.net.ConnectException
+import java.net.SocketTimeoutException
 import java.util.concurrent.Executors
 
 class MainActivity : Activity() {
@@ -191,11 +194,23 @@ class MainActivity : Activity() {
             } catch (e: Exception) {
                 lastError = e
                 val message = e.message.orEmpty()
-                val temporary = message.contains("Gemini HTTP 503") ||
+                val temporary = e is UnknownHostException ||
+                    e is ConnectException ||
+                    e is SocketTimeoutException ||
+                    message.contains("Gemini HTTP 503") ||
                     message.contains("Gemini HTTP 429") ||
                     message.contains("Gemini HTTP 500") ||
-                    message.contains("Gemini HTTP 502")
-                if (!temporary || attempt == 3) throw e
+                    message.contains("Gemini HTTP 502") ||
+                    message.contains("Unable to resolve host")
+                if (!temporary || attempt == 3) {
+                    if (e is UnknownHostException || message.contains("Unable to resolve host")) {
+                        throw Exception("Network/DNS error: Android could not resolve Google's API hostname. Check internet access, Private DNS/VPN/ad blocker, then retry. No result was saved.")
+                    }
+                    if (e is ConnectException || e is SocketTimeoutException) {
+                        throw Exception("Network timeout: could not reach Gemini. Check internet access and retry. No result was saved.")
+                    }
+                    throw e
+                }
                 try { Thread.sleep(delays[attempt]) } catch (_: InterruptedException) {
                     Thread.currentThread().interrupt()
                     throw Exception("Request cancelled.")
