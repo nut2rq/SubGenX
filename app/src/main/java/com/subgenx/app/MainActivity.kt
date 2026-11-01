@@ -115,6 +115,7 @@ class MainActivity : Activity() {
         }
     }
     private fun testApi() {
+        if (translationProvider.selectedItemPosition == 1) { testOpenRouterApi(); return }
         if (apiKey.isBlank()) { status.text = "First tap Set Gemini API key."; return }
         status.text = "Testing connection to Gemini…"
         executor.execute {
@@ -146,12 +147,34 @@ class MainActivity : Activity() {
                     .put(JSONObject().put("text", "Transcribe the speech in this audio. Detect the spoken language automatically. Return only the spoken words as a transcript, without commentary."))
                     .put(JSONObject().put("inline_data", JSONObject().put("mime_type", mime).put("data", Base64.encodeToString(bytes, Base64.NO_WRAP)))))
                 runOnUiThread { status.text = "Translating transcript to ${language.selectedItem}…" }
-                val translated = callGemini("gemini-3.8-flash", JSONArray().put(JSONObject().put("text", "Translate the following transcript into ${language.selectedItem}. Return only the translation and preserve paragraph breaks.\n\n" + transcribed)))
+                val translated = if (translationProvider.selectedItemPosition == 1) {
+                    val modelId = if (openRouterModel.selectedItemPosition == 0) "qwen/qwen-2.5-coder-32b-instruct:free" else "meta-llama/llama-3.1-8b-instruct:free"
+                    callOpenRouter(modelId, "Translate the following transcript into " + language.selectedItem + ". Return only the translation and preserve paragraph breaks.\n\n" + transcribed)
+                } else {
+                    callGemini("gemini-3.8-flash", JSONArray().put(JSONObject().put("text", "Translate the following transcript into " + language.selectedItem + ". Return only the translation and preserve paragraph breaks.\n\n" + transcribed)))
+                }
                 runOnUiThread { resultText.text = "TRANSCRIPT\n\n$transcribed\n\nTRANSLATION — ${language.selectedItem}\n\n$translated"; status.text = "Done. Review below. Timed SRT export is not implemented yet." }
             } catch (e: Exception) { runOnUiThread { status.text = "Processing failed: " + (e.message ?: e.javaClass.simpleName) } }
         }
     }
 
+    private fun callOpenRouter(modelId: String, prompt: String): String {
+        val conn = (URL("https://openrouter.ai/api/v1/chat/completions").openConnection() as HttpURLConnection)
+        conn.requestMethod = "POST"; conn.connectTimeout = 20000; conn.readTimeout = 120000; conn.doOutput = true
+        conn.setRequestProperty("Authorization", "Bearer " + openRouterApiKey)
+        conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+        conn.setRequestProperty("HTTP-Referer", "https://github.com/nut2rq/SubGenX")
+        conn.setRequestProperty("X-Title", "SubGenX")
+        val body = JSONObject().put("model", modelId).put("messages", JSONArray().put(JSONObject().put("role", "user").put("content", prompt))).put("temperature", 0.2).toString()
+        conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+        val code = conn.responseCode
+        val response = (if (code in 200..299) conn.inputStream else conn.errorStream)?.bufferedReader()?.use { it.readText() } ?: ""
+        conn.disconnect()
+        if (code !in 200..299) throw Exception("OpenRouter HTTP $code: " + extractError(response))
+        val choices = JSONObject(response).optJSONArray("choices")
+        val output = choices?.optJSONObject(0)?.optJSONObject("message")?.optString("content", "")?.trim().orEmpty()
+        return output.takeIf { it.isNotBlank() } ?: throw Exception("OpenRouter returned no translation text.")
+    }
     private fun callGemini(model: String, parts: JSONArray): String {
         var lastError: Exception? = null
         val delays = longArrayOf(2000L, 5000L, 10000L)
