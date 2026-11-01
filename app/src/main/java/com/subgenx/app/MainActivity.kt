@@ -182,38 +182,74 @@ class MainActivity : Activity() {
     }
 
     private fun startTranscription() {
+        // Capture selections on the UI thread before background work starts.
         val useWhisper = transcriptionProvider.selectedItemPosition == 0
+        val useOpenRouterTranslation = translationProvider.selectedItemPosition == 1
+        val modelPosition = openRouterModel.selectedItemPosition
+        val targetLanguage = language.selectedItem.toString()
+        val sourceFileName = fileLabel.text.toString()
         if (useWhisper && openRouterApiKey.isBlank()) { status.text = "Set your OpenRouter API key first to use Whisper transcription."; return }
         if (!useWhisper && apiKey.isBlank()) { status.text = "Set your Gemini API key first to use Gemini transcription."; return }
-        if (translationProvider.selectedItemPosition == 1 && openRouterApiKey.isBlank()) { status.text = "Set your OpenRouter API key first to use OpenRouter for translation."; return }
+        if (useOpenRouterTranslation && openRouterApiKey.isBlank()) { status.text = "Set your OpenRouter API key first to use OpenRouter for translation."; return }
+        if (!useOpenRouterTranslation && apiKey.isBlank()) { status.text = "Set your Gemini API key first to use Gemini for translation."; return }
         val uri = selectedAudio
         if (uri == null) { status.text = "Choose an audio file first."; return }
-        status.text = "Step 1/4 · Preparing audio…"; resultText.text = ""; latestResult = ""; saveResultButton.isEnabled = false
+
+        val transcriptionName = if (useWhisper) "Whisper Large V3 Turbo via OpenRouter" else "Gemini Transcribe"
+        val translationName = if (useOpenRouterTranslation) {
+            if (modelPosition == 0) "Qwen 2.5 Coder 32B Free" else "Llama 3.1 8B Free"
+        } else "Gemini"
+        status.text = "Step 1/4 · Preparing audio…"
+        resultText.text = ""
+        latestResult = ""
+        saveResultButton.isEnabled = false
+
         executor.execute {
+            var transcribed = ""
             try {
                 val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: error("Cannot read selected file")
                 if (bytes.size > 18 * 1024 * 1024) error("File is larger than 18 MB. Choose a smaller audio file for this prototype.")
                 val mime = contentResolver.getType(uri) ?: "audio/mpeg"
-                val transcriptionName = if (useWhisper) "Whisper Large V3 Turbo via OpenRouter" else "Gemini Transcribe"
-                runOnUiThread { status.text = "Step 2/4 · Transcribing audio with " + transcriptionName + "… (" + (bytes.size / 1024) + " KB)\nThis may take a while for longer files." }
-                val transcribed = if (useWhisper) {
+                runOnUiThread { status.text = "Step 2/4 · Transcribing audio with $transcriptionName… (" + (bytes.size / 1024) + " KB)\nThis may take a while for longer files." }
+                transcribed = if (useWhisper) {
                     callOpenRouterTranscription(bytes, mime)
                 } else {
                     callGemini("gemini-3.5-transcribe", JSONArray()
                         .put(JSONObject().put("text", "Transcribe the speech in this audio verbatim. Preserve profanity, slang, fillers, repetitions, and original wording. Detect the spoken language automatically. Return only the spoken words as a transcript, without commentary."))
                         .put(JSONObject().put("inline_data", JSONObject().put("mime_type", mime).put("data", Base64.encodeToString(bytes, Base64.NO_WRAP)))))
                 }
-                runOnUiThread { status.text = "Step 3/4 · Translating transcript to ${language.selectedItem} with " + if (translationProvider.selectedItemPosition == 1) (if (openRouterModel.selectedItemPosition == 0) "Qwen 2.5 Coder 32B Free" else "Llama 3.1 8B Free") else "Gemini" + "…" }
-                val translated = if (translationProvider.selectedItemPosition == 1) {
-                    val modelId = if (openRouterModel.selectedItemPosition == 0) "qwen/qwen-2.5-coder-32b-instruct:free" else "meta-llama/llama-3.1-8b-instruct:free"
-                    callOpenRouter(modelId, "Translate the following transcript into " + language.selectedItem + ". Return only the translation and preserve paragraph breaks.\n\n" + transcribed)
+                runOnUiThread { status.text = "Step 3/4 · Translating transcript to $targetLanguage with $translationName…" }
+                val translated = if (useOpenRouterTranslation) {
+                    val modelId = if (modelPosition == 0) "qwen/qwen-2.5-coder-32b-instruct:free" else "meta-llama/llama-3.1-8b-instruct:free"
+                    callOpenRouter(modelId, "Translate the following transcript into $targetLanguage. Return only the translation and preserve paragraph breaks. Preserve the meaning, tone, slang, and profanity; do not censor or summarize.\n\n$transcribed")
                 } else {
-                    callGemini("gemini-3.8-flash", JSONArray().put(JSONObject().put("text", "Translate the following transcript into " + language.selectedItem + ". Return only the translation and preserve paragraph breaks.\n\n" + transcribed)))
+                    callGemini("gemini-3.8-flash", JSONArray().put(JSONObject().put("text", "Translate the following transcript into $targetLanguage. Return only the translation and preserve paragraph breaks. Preserve the meaning, tone, slang, and profanity; do not censor or summarize.\n\n$transcribed")))
                 }
-                val modelName = if (translationProvider.selectedItemPosition == 1) (if (openRouterModel.selectedItemPosition == 0) "Qwen 2.5 Coder 32B Instruct Free" else "Llama 3.1 8B Instruct Free") else "Gemini"
-                val completed = "SOURCE FILE: ${fileLabel.text}\nTRANSCRIPTION (" + transcriptionName + ")\n\n$transcribed\n\nTRANSLATION ($modelName → ${language.selectedItem})\n\n$translated\n"
-                runOnUiThread { latestResult = completed; resultText.text = completed; status.text = "Step 4/4 · Completed ✓\nTranscript and translation are ready. Save the text below. Timed SRT export is not available yet."; saveResultButton.isEnabled = true }
-            } catch (e: Exception) { runOnUiThread { status.text = "Failed ✕\n" + (e.message ?: e.javaClass.simpleName) + "\n\nNo completed result was saved. You can retry after fixing the issue."; saveResultButton.isEnabled = false } }
+                val completed = "SOURCE FILE: $sourceFileName\nTRANSCRIPTION ($transcriptionName)\n\n$transcribed\n\nTRANSLATION ($translationName → $targetLanguage)\n\n$translated\n"
+                runOnUiThread {
+                    latestResult = completed
+                    resultText.text = completed
+                    status.text = "Step 4/4 · Completed ✓\nTranscription and translation are ready. Save the result using the button below."
+                    saveResultButton.isEnabled = true
+                }
+            } catch (e: Exception) {
+                val detail = e.message ?: e.javaClass.simpleName
+                if (transcribed.isNotBlank()) {
+                    // Keep the valuable transcript even if the translation provider fails.
+                    val recovery = "SOURCE FILE: $sourceFileName\nTRANSCRIPTION ($transcriptionName)\n\n$transcribed\n\nTRANSLATION FAILED ($translationName)\n$detail\n"
+                    runOnUiThread {
+                        latestResult = recovery
+                        resultText.text = recovery
+                        status.text = "Transcription completed ✓ but translation failed ✕\n$detail\n\nYour transcript is preserved. You can save it as TXT, switch translation provider/model, then use ‘Test translation without Gemini’ to translate it separately."
+                        saveResultButton.isEnabled = true
+                    }
+                } else {
+                    runOnUiThread {
+                        status.text = "Transcription failed ✕\n$detail\n\nNo transcript was produced, so there is no result to save. Check the selected transcription provider and connection."
+                        saveResultButton.isEnabled = false
+                    }
+                }
+            }
         }
     }
 
