@@ -87,6 +87,33 @@ class MainActivity : Activity() {
             }.setNegativeButton("Cancel", null).show()
     }
 
+    private fun showOpenRouterKeyDialog() {
+        val input = EditText(this).apply { hint = "Paste OpenRouter API key"; inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD; setText(openRouterApiKey) }
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), 0); addView(input) }
+        AlertDialog.Builder(this).setTitle("OpenRouter API key").setMessage("Create a key in OpenRouter. Keep it private. This prototype stores it in app preferences on this device.")
+            .setView(box).setPositiveButton("Save") { _, _ ->
+                val value = input.text.toString().trim()
+                if (value.isNotBlank()) { prefs.edit().putString("openrouter_api_key", value).apply(); openRouterKeyButton.text = "OpenRouter API key saved · Change"; status.text = "OpenRouter key saved." }
+                else { prefs.edit().remove("openrouter_api_key").apply(); openRouterKeyButton.text = "Set OpenRouter API key (optional)"; status.text = "OpenRouter API key cleared." }
+            }.setNegativeButton("Cancel", null).show()
+    }
+
+    private fun testOpenRouterApi() {
+        if (openRouterApiKey.isBlank()) { status.text = "Set your OpenRouter API key first."; return }
+        status.text = "Testing OpenRouter API…"
+        executor.execute {
+            val message = try {
+                val conn = (URL("https://openrouter.ai/api/v1/models").openConnection() as HttpURLConnection)
+                conn.requestMethod = "GET"; conn.connectTimeout = 15000; conn.readTimeout = 15000
+                conn.setRequestProperty("Authorization", "Bearer " + openRouterApiKey)
+                val code = conn.responseCode
+                val body = (if (code in 200..299) conn.inputStream else conn.errorStream)?.bufferedReader()?.use { it.readText() } ?: ""
+                conn.disconnect()
+                if (code in 200..299) "OpenRouter API connection successful. Key is accepted." else "OpenRouter API error ($code): " + extractError(body)
+            } catch (e: Exception) { "OpenRouter connection failed: " + (e.message ?: e.javaClass.simpleName) }
+            runOnUiThread { status.text = message }
+        }
+    }
     private fun testApi() {
         if (apiKey.isBlank()) { status.text = "First tap Set Gemini API key."; return }
         status.text = "Testing connection to Gemini…"
@@ -104,7 +131,8 @@ class MainActivity : Activity() {
     }
 
     private fun startTranscription() {
-        if (apiKey.isBlank()) { status.text = "Set your Gemini API key first."; return }
+        if (apiKey.isBlank()) { status.text = "Set your Gemini API key first. Gemini is used for audio transcription."; return }
+        if (translationProvider.selectedItemPosition == 1 && openRouterApiKey.isBlank()) { status.text = "Set your OpenRouter API key first to use OpenRouter for translation."; return }
         val uri = selectedAudio
         if (uri == null) { status.text = "Choose an audio file first."; return }
         status.text = "Reading audio file…"; resultText.text = ""
