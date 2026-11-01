@@ -111,6 +111,29 @@ class MainActivity : Activity() {
     }
 
     private fun callGemini(model: String, parts: JSONArray): String {
+        var lastError: Exception? = null
+        val delays = longArrayOf(2000L, 5000L, 10000L)
+        for (attempt in 0..3) {
+            try {
+                return callGeminiOnce(model, parts)
+            } catch (e: Exception) {
+                lastError = e
+                val message = e.message.orEmpty()
+                val temporary = message.contains("Gemini HTTP 503") ||
+                    message.contains("Gemini HTTP 429") ||
+                    message.contains("Gemini HTTP 500") ||
+                    message.contains("Gemini HTTP 502")
+                if (!temporary || attempt == 3) throw e
+                try { Thread.sleep(delays[attempt]) } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    throw Exception("Request cancelled.")
+                }
+            }
+        }
+        throw lastError ?: Exception("Gemini request failed.")
+    }
+
+    private fun callGeminiOnce(model: String, parts: JSONArray): String {
         val conn = (URL("https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=" + apiKey).openConnection() as HttpURLConnection)
         conn.requestMethod = "POST"; conn.connectTimeout = 20000; conn.readTimeout = 120000; conn.doOutput = true
         conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
