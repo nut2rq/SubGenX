@@ -22,10 +22,14 @@ class MainActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var resultText: TextView
     private lateinit var keyButton: Button
+    private lateinit var openRouterKeyButton: Button
+    private lateinit var translationProvider: Spinner
+    private lateinit var openRouterModel: Spinner
     private val pickAudio = 101
     private val executor = Executors.newSingleThreadExecutor()
     private val prefs by lazy { getSharedPreferences("subgenx_settings", MODE_PRIVATE) }
     private val apiKey get() = prefs.getString("gemini_api_key", "") ?: ""
+    private val openRouterApiKey get() = prefs.getString("openrouter_api_key", "") ?: ""
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -40,6 +44,16 @@ class MainActivity : Activity() {
         keyButton = Button(this).apply { text = if (apiKey.isBlank()) "Set Gemini API key" else "Gemini API key saved · Change"; isAllCaps = false; setOnClickListener { showApiKeyDialog() } }
         content.addView(keyButton, matchWrap())
         content.addView(TextView(this).apply { text = "Your key stays on this device. Never share it or commit it to GitHub."; textSize = 12f; setTextColor(0xFF687386.toInt()); setPadding(0, dp(4), 0, dp(18)) })
+        openRouterKeyButton = Button(this).apply { text = if (openRouterApiKey.isBlank()) "Set OpenRouter API key (optional)" else "OpenRouter API key saved · Change"; isAllCaps = false; setOnClickListener { showOpenRouterKeyDialog() } }
+        content.addView(openRouterKeyButton, matchWrap())
+        content.addView(TextView(this).apply { text = "Translation provider"; textSize = 16f; setTypeface(null, Typeface.BOLD); setTextColor(0xFF172033.toInt()); setPadding(0, dp(14), 0, dp(4)) })
+        translationProvider = Spinner(this)
+        translationProvider.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, listOf("Google Gemini", "OpenRouter AI"))
+        content.addView(translationProvider, matchWrap())
+        content.addView(TextView(this).apply { text = "OpenRouter model"; textSize = 16f; setTypeface(null, Typeface.BOLD); setTextColor(0xFF172033.toInt()); setPadding(0, dp(8), 0, dp(4)) })
+        openRouterModel = Spinner(this)
+        openRouterModel.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, listOf("Primary · Qwen 2.5 Coder 32B Free", "Uncensor option · Llama 3.1 8B Free"))
+        content.addView(openRouterModel, matchWrap())
         content.addView(TextView(this).apply { text = "Create subtitles"; textSize = 21f; setTextColor(0xFF172033.toInt()); setTypeface(null, Typeface.BOLD) })
         content.addView(TextView(this).apply { text = "Choose an audio file, then select the language you want."; textSize = 14f; setTextColor(0xFF687386.toInt()); setPadding(0, dp(6), 0, dp(18)) })
         content.addView(Button(this).apply { text = "Choose audio file"; isAllCaps = false; setOnClickListener {
