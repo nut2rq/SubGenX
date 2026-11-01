@@ -114,15 +114,45 @@ class MainActivity : Activity() {
         val conn = (URL("https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=" + apiKey).openConnection() as HttpURLConnection)
         conn.requestMethod = "POST"; conn.connectTimeout = 20000; conn.readTimeout = 120000; conn.doOutput = true
         conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
-        val body = JSONObject().put("contents", JSONArray().put(JSONObject().put("parts", parts))).toString()
+        val request = JSONObject().put("contents", JSONArray().put(JSONObject().put("parts", parts)))
+        if (model == "gemini-3.5-transcribe") {
+            request.put("generationConfig", JSONObject().put("audioTranscriptionConfig", JSONObject().put("mode", "VERBATIM")))
+        }
+        val body = request.toString()
         conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
         val code = conn.responseCode
         val response = (if (code in 200..299) conn.inputStream else conn.errorStream)?.bufferedReader()?.use { it.readText() } ?: ""
         conn.disconnect()
         if (code !in 200..299) throw Exception("Gemini HTTP $code: " + extractError(response))
         val json = JSONObject(response)
-        return json.optJSONArray("candidates")?.optJSONObject(0)?.optJSONObject("content")?.optJSONArray("parts")?.optJSONObject(0)?.optString("text")
-            ?.takeIf { it.isNotBlank() } ?: throw Exception("Gemini returned no text.")
+        val candidates = json.optJSONArray("candidates")
+        if (candidates == null || candidates.length() == 0) {
+            throw Exception("Gemini returned no candidate. Response: " + response.take(500))
+        }
+        val candidate = candidates.optJSONObject(0) ?: throw Exception("Gemini returned an empty candidate.")
+        val responseParts = candidate.optJSONObject("content")?.optJSONArray("parts")
+        val output = StringBuilder()
+        if (responseParts != null) {
+            for (i in 0 until responseParts.length()) {
+                val part = responseParts.optJSONObject(i) ?: continue
+                val text = part.optString("text", "")
+                if (text.isNotBlank()) output.append(text)
+                val audioTx = part.optJSONObject("audioTranscription")
+                if (audioTx != null) {
+                    val txText = audioTx.optString("text", "")
+                    if (txText.isNotBlank()) output.append(txText)
+                    val words = audioTx.optJSONArray("words")
+                    if (txText.isBlank() && words != null) {
+                        for (w in 0 until words.length()) {
+                            val word = words.optJSONObject(w)?.optString("word", "") ?: ""
+                            if (word.isNotBlank()) output.append(word).append(' ')
+                        }
+                    }
+                }
+            }
+        }
+        return output.toString().trim().takeIf { it.isNotBlank() }
+            ?: throw Exception("Gemini response had no transcript text. Finish reason: " + candidate.optString("finishReason", "unknown") + ". Raw response: " + response.take(700))
     }
     private fun extractError(body: String): String = try { JSONObject(body).optJSONObject("error")?.optString("message") ?: body.take(300) } catch (_: Exception) { body.take(300) }
 
