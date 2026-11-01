@@ -72,7 +72,44 @@ class MainActivity : Activity() {
         language = Spinner(this)
         language.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, listOf("Thai", "English", "Chinese (Simplified)", "Japanese", "Korean", "Spanish", "French", "German"))
         content.addView(language, matchWrap())
+        val testProviderButton = Button(this).apply { text = "Test selected API"; isAllCaps = false; setOnClickListener { testApi() } }
+        content.addView(testProviderButton, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
+        translationProvider.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                testProviderButton.text = if (position == 1) "Test OpenRouter API" else "Test Gemini API"
+                status.text = if (position == 1) "OpenRouter selected for translation. Gemini is still used for audio transcription." else "Gemini selected for transcription and translation."
+            }
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
+        content.addView(TextView(this).apply { text = "Test translation without Gemini"; textSize = 16f; setTypeface(null, Typeface.BOLD); setTextColor(0xFF172033.toInt()); setPadding(0, dp(16), 0, dp(4)) })
+        val manualTranscript = EditText(this).apply { hint = "Paste a short transcript here to test the selected translation provider"; minLines = 3; gravity = android.view.Gravity.TOP; setTextColor(0xFF172033.toInt()) }
+        content.addView(manualTranscript, matchWrap())
+        content.addView(Button(this).apply { text = "Translate test text"; isAllCaps = false; setOnClickListener {
+            val source = manualTranscript.text.toString().trim()
+            if (source.isBlank()) { status.text = "Paste a short transcript first."; return@setOnClickListener }
+            if (translationProvider.selectedItemPosition == 1 && openRouterApiKey.isBlank()) { status.text = "Set your OpenRouter API key first."; return@setOnClickListener }
+            if (translationProvider.selectedItemPosition == 0 && apiKey.isBlank()) { status.text = "Set your Gemini API key first."; return@setOnClickListener }
+            val target = language.selectedItem.toString()
+            val useOpenRouter = translationProvider.selectedItemPosition == 1
+            val modelPosition = openRouterModel.selectedItemPosition
+            status.text = if (useOpenRouter) "Testing translation with OpenRouter…" else "Testing translation with Gemini…"
+            resultText.text = ""; saveResultButton.isEnabled = false
+            executor.execute {
+                try {
+                    val translated = if (useOpenRouter) {
+                        val modelId = if (modelPosition == 0) "qwen/qwen-2.5-coder-32b-instruct:free" else "meta-llama/llama-3.1-8b-instruct:free"
+                        callOpenRouter(modelId, "Translate the following text into " + target + ". Return only the translation.\n\n" + source)
+                    } else {
+                        callGemini("gemini-3.8-flash", JSONArray().put(JSONObject().put("text", "Translate the following text into " + target + ". Return only the translation.\n\n" + source)))
+                    }
+                    val modelName = if (useOpenRouter) (if (modelPosition == 0) "Qwen 2.5 Coder 32B Instruct Free" else "Llama 3.1 8B Instruct Free") else "Gemini 3.8 Flash"
+                    val completed = "TRANSLATION TEST\nProvider: " + modelName + "\nTarget: " + target + "\n\nSOURCE\n" + source + "\n\nTRANSLATION\n" + translated
+                    runOnUiThread { latestResult = completed; resultText.text = completed; status.text = "Translation test completed ✓"; saveResultButton.isEnabled = true }
+                } catch (e: Exception) { runOnUiThread { status.text = "Translation test failed ✕\n" + (e.message ?: e.javaClass.simpleName); saveResultButton.isEnabled = false } }
+            }
+        } }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
         content.addView(Button(this).apply { text = "Test Gemini API"; isAllCaps = false; setOnClickListener { testApi() } }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
+
         content.addView(Button(this).apply { text = "Start transcription & translation"; isAllCaps = false; setOnClickListener { startTranscription() } }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
         status = TextView(this).apply { text = "Ready. Add your Gemini API key to begin."; textSize = 14f; setTextColor(0xFF687386.toInt()); setPadding(0, dp(16), 0, dp(12)) }
         content.addView(status)
