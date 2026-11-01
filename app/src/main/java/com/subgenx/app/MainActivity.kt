@@ -21,6 +21,9 @@ class MainActivity : Activity() {
     private lateinit var language: Spinner
     private lateinit var status: TextView
     private lateinit var resultText: TextView
+    private lateinit var saveResultButton: Button
+    private var latestResult: String = ""
+    private val saveResultRequest = 102
     private lateinit var keyButton: Button
     private lateinit var openRouterKeyButton: Button
     private lateinit var translationProvider: Spinner
@@ -72,6 +75,8 @@ class MainActivity : Activity() {
         content.addView(status)
         resultText = TextView(this).apply { textSize = 14f; setTextColor(0xFF172033.toInt()); setPadding(dp(12), dp(12), dp(12), dp(12)); setBackgroundColor(0xFFECEFF6.toInt()) }
         content.addView(resultText)
+        saveResultButton = Button(this).apply { text = "Save result as TXT"; isAllCaps = false; isEnabled = false; setOnClickListener { saveResult() } }
+        content.addView(saveResultButton, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
         content.addView(TextView(this).apply { text = "Cloud processing sends your audio to Google and uses your account quota and terms."; textSize = 12f; setTextColor(0xFF687386.toInt()); setPadding(0, dp(14), 0, dp(10)) })
         scroll.addView(content); root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f)); setContentView(root)
     }
@@ -136,25 +141,27 @@ class MainActivity : Activity() {
         if (translationProvider.selectedItemPosition == 1 && openRouterApiKey.isBlank()) { status.text = "Set your OpenRouter API key first to use OpenRouter for translation."; return }
         val uri = selectedAudio
         if (uri == null) { status.text = "Choose an audio file first."; return }
-        status.text = "Reading audio file…"; resultText.text = ""
+        status.text = "Step 1/4 · Preparing audio…"; resultText.text = ""; latestResult = ""; saveResultButton.isEnabled = false
         executor.execute {
             try {
                 val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: error("Cannot read selected file")
                 if (bytes.size > 18 * 1024 * 1024) error("File is larger than 18 MB. Choose a smaller audio file for this prototype.")
                 val mime = contentResolver.getType(uri) ?: "audio/mpeg"
-                runOnUiThread { status.text = "Uploading audio to Gemini for transcription… (${bytes.size / 1024} KB)" }
+                runOnUiThread { status.text = "Step 2/4 · Transcribing audio with Gemini… (${bytes.size / 1024} KB)\nThis may take a while for longer files." }
                 val transcribed = callGemini("gemini-3.5-transcribe", JSONArray()
                     .put(JSONObject().put("text", "Transcribe the speech in this audio. Detect the spoken language automatically. Return only the spoken words as a transcript, without commentary."))
                     .put(JSONObject().put("inline_data", JSONObject().put("mime_type", mime).put("data", Base64.encodeToString(bytes, Base64.NO_WRAP)))))
-                runOnUiThread { status.text = "Translating transcript to ${language.selectedItem}…" }
+                runOnUiThread { status.text = "Step 3/4 · Translating transcript to ${language.selectedItem} with " + if (translationProvider.selectedItemPosition == 1) (if (openRouterModel.selectedItemPosition == 0) "Qwen 2.5 Coder 32B Free" else "Llama 3.1 8B Free") else "Gemini" + "…" }
                 val translated = if (translationProvider.selectedItemPosition == 1) {
                     val modelId = if (openRouterModel.selectedItemPosition == 0) "qwen/qwen-2.5-coder-32b-instruct:free" else "meta-llama/llama-3.1-8b-instruct:free"
                     callOpenRouter(modelId, "Translate the following transcript into " + language.selectedItem + ". Return only the translation and preserve paragraph breaks.\n\n" + transcribed)
                 } else {
                     callGemini("gemini-3.8-flash", JSONArray().put(JSONObject().put("text", "Translate the following transcript into " + language.selectedItem + ". Return only the translation and preserve paragraph breaks.\n\n" + transcribed)))
                 }
-                runOnUiThread { resultText.text = "TRANSCRIPT\n\n$transcribed\n\nTRANSLATION — ${language.selectedItem}\n\n$translated"; status.text = "Done. Review below. Timed SRT export is not implemented yet." }
-            } catch (e: Exception) { runOnUiThread { status.text = "Processing failed: " + (e.message ?: e.javaClass.simpleName) } }
+                val modelName = if (translationProvider.selectedItemPosition == 1) (if (openRouterModel.selectedItemPosition == 0) "Qwen 2.5 Coder 32B Instruct Free" else "Llama 3.1 8B Instruct Free") else "Gemini"
+                val completed = "SOURCE FILE: ${fileLabel.text}\nTRANSCRIPTION (Gemini)\n\n$transcribed\n\nTRANSLATION ($modelName → ${language.selectedItem})\n\n$translated\n"
+                runOnUiThread { latestResult = completed; resultText.text = completed; status.text = "Step 4/4 · Completed ✓\nTranscript and translation are ready. Save the text below. Timed SRT export is not available yet."; saveResultButton.isEnabled = true }
+            } catch (e: Exception) { runOnUiThread { status.text = "Failed ✕\n" + (e.message ?: e.javaClass.simpleName) + "\n\nNo completed result was saved. You can retry after fixing the issue."; saveResultButton.isEnabled = false } }
         }
     }
 
@@ -244,9 +251,28 @@ class MainActivity : Activity() {
     }
     private fun extractError(body: String): String = try { JSONObject(body).optJSONObject("error")?.optString("message") ?: body.take(300) } catch (_: Exception) { body.take(300) }
 
+    private fun saveResult() {
+        if (latestResult.isBlank()) { status.text = "No completed result to save."; return }
+        val rawName = fileLabel.text.toString().substringBeforeLast(".", fileLabel.text.toString())
+        val safeName = rawName.replace(Regex("[^A-Za-z0-9ก-๙_-]"), "_").ifBlank { "SubGenX" }
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TITLE, "${safeName}_subtitles.txt")
+        }
+        startActivityForResult(intent, saveResultRequest)
+    }
+
     @Deprecated("Deprecated in Android")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == saveResultRequest && resultCode == RESULT_OK) {
+            val out = data?.data
+            if (out != null) try {
+                contentResolver.openOutputStream(out)?.use { it.write(latestResult.toByteArray(Charsets.UTF_8)) }
+                status.text = "Completed ✓ Result saved. You selected the save location."
+            } catch (e: Exception) { status.text = "Could not save result: " + (e.message ?: "unknown error") }
+        }
         if (requestCode == pickAudio && resultCode == RESULT_OK) {
             selectedAudio = data?.data
             selectedAudio?.let { uri ->
