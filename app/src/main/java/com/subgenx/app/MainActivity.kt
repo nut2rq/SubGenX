@@ -29,6 +29,7 @@ class MainActivity : Activity() {
     private val saveResultRequest = 102
     private lateinit var keyButton: Button
     private lateinit var openRouterKeyButton: Button
+    private lateinit var transcriptionProvider: Spinner
     private lateinit var translationProvider: Spinner
     private lateinit var openRouterModel: Spinner
     private val pickAudio = 101
@@ -52,6 +53,10 @@ class MainActivity : Activity() {
         content.addView(TextView(this).apply { text = "Your key stays on this device. Never share it or commit it to GitHub."; textSize = 12f; setTextColor(0xFF687386.toInt()); setPadding(0, dp(4), 0, dp(18)) })
         openRouterKeyButton = Button(this).apply { text = if (openRouterApiKey.isBlank()) "Set OpenRouter API key (optional)" else "OpenRouter API key saved · Change"; isAllCaps = false; setOnClickListener { showOpenRouterKeyDialog() } }
         content.addView(openRouterKeyButton, matchWrap())
+        content.addView(TextView(this).apply { text = "Transcription provider"; textSize = 16f; setTypeface(null, Typeface.BOLD); setTextColor(0xFF172033.toInt()); setPadding(0, dp(14), 0, dp(4)) })
+        transcriptionProvider = Spinner(this)
+        transcriptionProvider.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, listOf("OpenRouter · Whisper Large V3 Turbo", "Google Gemini · Gemini Transcribe"))
+        content.addView(transcriptionProvider, matchWrap())
         content.addView(TextView(this).apply { text = "Translation provider"; textSize = 16f; setTypeface(null, Typeface.BOLD); setTextColor(0xFF172033.toInt()); setPadding(0, dp(14), 0, dp(4)) })
         translationProvider = Spinner(this)
         translationProvider.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, listOf("Google Gemini", "OpenRouter AI"))
@@ -177,7 +182,9 @@ class MainActivity : Activity() {
     }
 
     private fun startTranscription() {
-        if (apiKey.isBlank()) { status.text = "Set your Gemini API key first. Gemini is used for audio transcription."; return }
+        val useWhisper = transcriptionProvider.selectedItemPosition == 0
+        if (useWhisper && openRouterApiKey.isBlank()) { status.text = "Set your OpenRouter API key first to use Whisper transcription."; return }
+        if (!useWhisper && apiKey.isBlank()) { status.text = "Set your Gemini API key first to use Gemini transcription."; return }
         if (translationProvider.selectedItemPosition == 1 && openRouterApiKey.isBlank()) { status.text = "Set your OpenRouter API key first to use OpenRouter for translation."; return }
         val uri = selectedAudio
         if (uri == null) { status.text = "Choose an audio file first."; return }
@@ -187,10 +194,15 @@ class MainActivity : Activity() {
                 val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: error("Cannot read selected file")
                 if (bytes.size > 18 * 1024 * 1024) error("File is larger than 18 MB. Choose a smaller audio file for this prototype.")
                 val mime = contentResolver.getType(uri) ?: "audio/mpeg"
-                runOnUiThread { status.text = "Step 2/4 · Transcribing audio with Gemini… (${bytes.size / 1024} KB)\nThis may take a while for longer files." }
-                val transcribed = callGemini("gemini-3.5-transcribe", JSONArray()
-                    .put(JSONObject().put("text", "Transcribe the speech in this audio. Detect the spoken language automatically. Return only the spoken words as a transcript, without commentary."))
-                    .put(JSONObject().put("inline_data", JSONObject().put("mime_type", mime).put("data", Base64.encodeToString(bytes, Base64.NO_WRAP)))))
+                val transcriptionName = if (useWhisper) "Whisper Large V3 Turbo via OpenRouter" else "Gemini Transcribe"
+                runOnUiThread { status.text = "Step 2/4 · Transcribing audio with " + transcriptionName + "… (" + (bytes.size / 1024) + " KB)\nThis may take a while for longer files." }
+                val transcribed = if (useWhisper) {
+                    callOpenRouterTranscription(bytes, mime)
+                } else {
+                    callGemini("gemini-3.5-transcribe", JSONArray()
+                        .put(JSONObject().put("text", "Transcribe the speech in this audio verbatim. Preserve profanity, slang, fillers, repetitions, and original wording. Detect the spoken language automatically. Return only the spoken words as a transcript, without commentary."))
+                        .put(JSONObject().put("inline_data", JSONObject().put("mime_type", mime).put("data", Base64.encodeToString(bytes, Base64.NO_WRAP)))))
+                }
                 runOnUiThread { status.text = "Step 3/4 · Translating transcript to ${language.selectedItem} with " + if (translationProvider.selectedItemPosition == 1) (if (openRouterModel.selectedItemPosition == 0) "Qwen 2.5 Coder 32B Free" else "Llama 3.1 8B Free") else "Gemini" + "…" }
                 val translated = if (translationProvider.selectedItemPosition == 1) {
                     val modelId = if (openRouterModel.selectedItemPosition == 0) "qwen/qwen-2.5-coder-32b-instruct:free" else "meta-llama/llama-3.1-8b-instruct:free"
@@ -199,12 +211,40 @@ class MainActivity : Activity() {
                     callGemini("gemini-3.8-flash", JSONArray().put(JSONObject().put("text", "Translate the following transcript into " + language.selectedItem + ". Return only the translation and preserve paragraph breaks.\n\n" + transcribed)))
                 }
                 val modelName = if (translationProvider.selectedItemPosition == 1) (if (openRouterModel.selectedItemPosition == 0) "Qwen 2.5 Coder 32B Instruct Free" else "Llama 3.1 8B Instruct Free") else "Gemini"
-                val completed = "SOURCE FILE: ${fileLabel.text}\nTRANSCRIPTION (Gemini)\n\n$transcribed\n\nTRANSLATION ($modelName → ${language.selectedItem})\n\n$translated\n"
+                val completed = "SOURCE FILE: ${fileLabel.text}\nTRANSCRIPTION (" + transcriptionName + ")\n\n$transcribed\n\nTRANSLATION ($modelName → ${language.selectedItem})\n\n$translated\n"
                 runOnUiThread { latestResult = completed; resultText.text = completed; status.text = "Step 4/4 · Completed ✓\nTranscript and translation are ready. Save the text below. Timed SRT export is not available yet."; saveResultButton.isEnabled = true }
             } catch (e: Exception) { runOnUiThread { status.text = "Failed ✕\n" + (e.message ?: e.javaClass.simpleName) + "\n\nNo completed result was saved. You can retry after fixing the issue."; saveResultButton.isEnabled = false } }
         }
     }
 
+    private fun callOpenRouterTranscription(bytes: ByteArray, mime: String): String {
+        val format = when {
+            mime.contains("wav", ignoreCase = true) -> "wav"
+            mime.contains("mpeg", ignoreCase = true) || mime.contains("mp3", ignoreCase = true) -> "mp3"
+            mime.contains("flac", ignoreCase = true) -> "flac"
+            mime.contains("mp4", ignoreCase = true) || mime.contains("m4a", ignoreCase = true) || mime.contains("x-m4a", ignoreCase = true) -> "m4a"
+            mime.contains("ogg", ignoreCase = true) -> "ogg"
+            mime.contains("webm", ignoreCase = true) -> "webm"
+            mime.contains("aac", ignoreCase = true) -> "aac"
+            else -> throw Exception("Unsupported audio format ($mime). Choose MP3, WAV, M4A, FLAC, OGG, WEBM, or AAC.")
+        }
+        val conn = (URL("https://openrouter.ai/api/v1/audio/transcriptions").openConnection() as HttpURLConnection)
+        conn.requestMethod = "POST"; conn.connectTimeout = 20000; conn.readTimeout = 60000; conn.doOutput = true
+        conn.setRequestProperty("Authorization", "Bearer " + openRouterApiKey)
+        conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+        conn.setRequestProperty("HTTP-Referer", "https://github.com/nut2rq/SubGenX")
+        conn.setRequestProperty("X-Title", "SubGenX")
+        val payload = JSONObject().put("model", "openai/whisper-large-v3-turbo")
+            .put("input_audio", JSONObject().put("data", Base64.encodeToString(bytes, Base64.NO_WRAP)).put("format", format))
+            .put("response_format", "json").put("temperature", 0)
+        conn.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
+        val code = conn.responseCode
+        val response = (if (code in 200..299) conn.inputStream else conn.errorStream)?.bufferedReader()?.use { it.readText() } ?: ""
+        conn.disconnect()
+        if (code !in 200..299) throw Exception("OpenRouter transcription HTTP $code: " + extractError(response))
+        val transcript = JSONObject(response).optString("text", "").trim()
+        return transcript.takeIf { it.isNotBlank() } ?: throw Exception("Whisper returned no transcript text.")
+    }
     private fun callOpenRouter(modelId: String, prompt: String): String {
         val conn = (URL("https://openrouter.ai/api/v1/chat/completions").openConnection() as HttpURLConnection)
         conn.requestMethod = "POST"; conn.connectTimeout = 20000; conn.readTimeout = 120000; conn.doOutput = true
