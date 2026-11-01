@@ -104,7 +104,7 @@ class MainActivity : Activity() {
                     .put(JSONObject().put("text", "Transcribe the speech in this audio. Detect the spoken language automatically. Return only the spoken words as a transcript, without commentary."))
                     .put(JSONObject().put("inline_data", JSONObject().put("mime_type", mime).put("data", Base64.encodeToString(bytes, Base64.NO_WRAP)))))
                 runOnUiThread { status.text = "Translating transcript to ${language.selectedItem}…" }
-                val translated = callGemini("gemini-2.5-flash", JSONArray().put(JSONObject().put("text", "Translate the following transcript into ${language.selectedItem}. Return only the translation and preserve paragraph breaks.\n\n" + transcribed)))
+                val translated = callGemini("gemini-3.8-flash", JSONArray().put(JSONObject().put("text", "Translate the following transcript into ${language.selectedItem}. Return only the translation and preserve paragraph breaks.\n\n" + transcribed)))
                 runOnUiThread { resultText.text = "TRANSCRIPT\n\n$transcribed\n\nTRANSLATION — ${language.selectedItem}\n\n$translated"; status.text = "Done. Review below. Timed SRT export is not implemented yet." }
             } catch (e: Exception) { runOnUiThread { status.text = "Processing failed: " + (e.message ?: e.javaClass.simpleName) } }
         }
